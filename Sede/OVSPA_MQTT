@@ -1,0 +1,78 @@
+import mariadb
+import paho.mqtt.client as mqtt
+import time
+
+DB_USER = "andavaro"
+DB_PASSWORD = “**********”
+DB_HOST = "localhost"
+DB_PORT = 3306
+DB_NAME = "temperatura"
+ID_ESTACION = 1
+
+CA_CERT = "ca.crt"
+CLIENT_CERT = "client.crt"
+CLIENT_KEY = "client.key"
+
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("Conectado al bróker MQTT TLS exitosamente (QoS=1, sesión persistente)")
+        client.subscribe("sensors/Paisita/temps", qos=1)
+    else:
+        print(f"Fallo al conectar, código de retorno: {rc}")
+
+def on_message(client, userdata, msg):
+    print(f"Mensaje recibido en '{msg.topic}': {msg.payload.decode()}")
+    datos = msg.payload.decode().replace(" ", "").split(",")
+    guardar_en_db(datos)
+
+def guardar_en_db(valores):
+    if not valores:
+        return
+    conn = None
+    cur = None
+    try:
+        conn = mariadb.connect(
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_NAME
+        )
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO mediciones (id_estacion, temp1, temp2, temp3) VALUES (?, ?, ?, ?)",
+            (ID_ESTACION, valores[0], valores[1], valores[2])
+        )
+        conn.commit()
+        print(f"Datos insertados en la DB: {valores}")
+    except mariadb.Error as e:
+        print(f"Error al interactuar con MariaDB: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+client = mqtt.Client(client_id="mi_cliente_suscriptor", clean_session=False)
+client.on_connect = on_connect
+client.on_message = on_message
+
+client.tls_set(ca_certs=CA_CERT, certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+client.tls_insecure_set(False)
+
+try:
+    client.connect("192.168.80.185", 8883, 60)
+except Exception as e:
+    print(f"Error al conectar: {e}")
+    exit()
+
+client.loop_start()
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Deteniendo cliente...")
+    client.loop_stop()
+    client.disconnect()
